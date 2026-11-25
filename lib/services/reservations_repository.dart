@@ -41,8 +41,11 @@ class ReservationsRepository {
     });
   }
 
-  /// Verifica si la placa tiene conflicto con otra reserva 'activa' el mismo día y horario
+  /// Verifica si la placa tiene conflicto con otra reserva 'activa' del usuario el mismo día y horario.
+  /// Consulta únicamente por ownerId en Firestore para cumplir con las reglas de seguridad
+  /// y evitar la necesidad de crear índices compuestos, realizando el filtrado de placa y estado en memoria.
   Future<bool> hasPlateConflict({
+    required String ownerId,
     required String plate,
     required DateTime date,
     required int startMinutes,
@@ -50,15 +53,26 @@ class ReservationsRepository {
     String? excludeReservationId,
   }) async {
     final cleanPlate = plate.toUpperCase().trim();
+    // Consulta filtrada por el dueño para respetar reglas de seguridad de Firestore
+    // y sin necesidad de índices compuestos adicionales.
     final query = await _reservationsRef
-        .where('plate', isEqualTo: cleanPlate)
-        .where('status', isEqualTo: 'activa')
+        .where('ownerId', isEqualTo: ownerId)
         .get();
 
     for (final doc in query.docs) {
       if (excludeReservationId != null && doc.id == excludeReservationId) {
         continue;
       }
+      final data = doc.data();
+      final status = data['status'] as String?;
+      if (status != 'activa') {
+        continue;
+      }
+      final docPlate = (data['plate'] as String? ?? '').toUpperCase().trim();
+      if (docPlate != cleanPlate) {
+        continue;
+      }
+
       final res = Reservation.fromDoc(doc);
       final sameDay = res.date.year == date.year &&
           res.date.month == date.month &&
@@ -100,6 +114,7 @@ class ReservationsRepository {
 
     // Comprobar conflicto de placa
     final conflict = await hasPlateConflict(
+      ownerId: ownerId,
       plate: plate,
       date: date,
       startMinutes: startMin,
@@ -207,6 +222,7 @@ class ReservationsRepository {
 
     // Verificar conflicto de horario con otra reserva
     final conflict = await hasPlateConflict(
+      ownerId: updatedReservation.ownerId,
       plate: updatedReservation.plate,
       date: updatedReservation.date,
       startMinutes: updatedReservation.startMinutes,

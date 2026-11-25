@@ -83,7 +83,7 @@ service cloud.firestore {
     // - Eliminación: Denegada siempre (los espacios del campus son fijos).
     // =========================================================================
     match /parking_spaces/{spaceId} {
-      allow read: if true;
+      allow read: if isAuthenticated();
       
       allow create: if isAuthenticated() 
         && !exists(/databases/$(database)/documents/parking_spaces/$(spaceId))
