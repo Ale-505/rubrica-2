@@ -61,11 +61,14 @@ class _ReservationEditScreenState extends State<ReservationEditScreen> {
       final list = await _vehiclesRepo.getMyVehicles(widget.reservation.ownerId);
       if (mounted) {
         setState(() {
-          _userVehicles = list;
-          // Buscar si el vehículo de la reserva está en la lista
-          _selectedVehicle = list.firstWhere(
+          final matchIndex = list.indexWhere(
             (v) => v.id == widget.reservation.vehicleId || v.plate == widget.reservation.plate,
-            orElse: () => Vehicle(
+          );
+          if (matchIndex != -1) {
+            _userVehicles = list;
+            _selectedVehicle = list[matchIndex];
+          } else {
+            final fallback = Vehicle(
               id: widget.reservation.vehicleId,
               ownerId: widget.reservation.ownerId,
               plate: widget.reservation.plate,
@@ -73,8 +76,10 @@ class _ReservationEditScreenState extends State<ReservationEditScreen> {
               brand: 'Vehículo registrado',
               color: 'Asignado',
               createdAt: widget.reservation.createdAt,
-            ),
-          );
+            );
+            _userVehicles = [fallback, ...list];
+            _selectedVehicle = fallback;
+          }
           _isLoadingVehicles = false;
         });
       }

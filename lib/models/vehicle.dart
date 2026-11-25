@@ -62,4 +62,12 @@ class Vehicle {
 
   /// Título descriptivo para dropdowns y listados
   String get displayTitle => '$plate - $brand ($color)';
+
+  @override
+  bool operator ==(Object other) =>
+      identical(this, other) ||
+      other is Vehicle && runtimeType == other.runtimeType && id == other.id;
+
+  @override
+  int get hashCode => id.hashCode;
 }

@@ -492,13 +492,19 @@ class _ReservationFormScreenState extends State<ReservationFormScreen> {
                         stream: _vehiclesRepo.getMyVehiclesStream(uid),
                         builder: (context, vSnap) {
                           final vehicles = vSnap.data ?? [];
-                          if (_selectedVehicle == null && vehicles.isNotEmpty) {
-                            _selectedVehicle = vehicles.first;
-                          }
 
-                          final currentV = vehicles.any((v) => v.id == _selectedVehicle?.id)
-                              ? _selectedVehicle
-                              : (vehicles.isNotEmpty ? vehicles.first : null);
+                          // Encontrar el vehículo seleccionado directamente en la lista emitida por el Stream
+                          Vehicle? currentV;
+                          if (_selectedVehicle != null) {
+                            for (final v in vehicles) {
+                              if (v.id == _selectedVehicle!.id) {
+                                currentV = v;
+                                break;
+                              }
+                            }
+                          }
+                          currentV ??= vehicles.isNotEmpty ? vehicles.first : null;
+                          _selectedVehicle = currentV;
 
                           return Column(
                             crossAxisAlignment: CrossAxisAlignment.stretch,
