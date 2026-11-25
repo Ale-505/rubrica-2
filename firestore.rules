@@ -1,0 +1,99 @@
+rules_version = '2';
+
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    // =========================================================================
+    // REGLA GLOBAL POR DEFECTO: Denegar todo acceso no explícitamente permitido
+    // =========================================================================
+    match /{document=**} {
+      allow read, write: if false;
+    }
+
+    // Funciones auxiliares de seguridad
+    function isAuthenticated() {
+      return request.auth != null;
+    }
+
+    function isOwner(uid) {
+      return isAuthenticated() && request.auth.uid == uid;
+    }
+
+    function isValidStatus(status) {
+      return status in ['disponible', 'ocupado', 'reservado'];
+    }
+
+    // =========================================================================
+    // COLECCIÓN 1: users/{uid}
+    // Cada usuario solo puede consultar y modificar su propio documento de perfil
+    // =========================================================================
+    match /users/{uid} {
+      allow read, write: if isOwner(uid);
+    }
+
+    // =========================================================================
+    // COLECCIÓN 2: vehicles/{vehicleId}
+    // Solo el dueño (ownerId) puede consultar, registrar, editar o eliminar sus vehículos
+    // =========================================================================
+    match /vehicles/{vehicleId} {
+      allow read: if isAuthenticated() && resource.data.ownerId == request.auth.uid;
+      
+      allow create: if isAuthenticated() 
+        && request.resource.data.ownerId == request.auth.uid
+        && request.resource.data.plate is string
+        && request.resource.data.plate.size() >= 5
+        && request.resource.data.vehicleType in ['automovil', 'motocicleta'];
+        
+      allow update: if isAuthenticated() 
+        && resource.data.ownerId == request.auth.uid
+        && request.resource.data.ownerId == request.auth.uid;
+        
+      allow delete: if isAuthenticated() && resource.data.ownerId == request.auth.uid;
+    }
+
+    // =========================================================================
+    // COLECCIÓN 3: reservations/{reservationId}
+    // Gestión de reservas: solo el propietario puede ver, editar o cancelar su reserva.
+    // Al crear una reserva, debe pertenecer al usuario autenticado y arrancar 'activa'.
+    // =========================================================================
+    match /reservations/{reservationId} {
+      allow read: if isAuthenticated() && resource.data.ownerId == request.auth.uid;
+      
+      allow create: if isAuthenticated()
+        && request.resource.data.ownerId == request.auth.uid
+        && request.resource.data.status == 'activa'
+        && request.resource.data.spaceId is string
+        && request.resource.data.plate is string;
+        
+      allow update: if isAuthenticated()
+        && resource.data.ownerId == request.auth.uid
+        && request.resource.data.ownerId == request.auth.uid
+        && request.resource.data.status in ['activa', 'completada', 'cancelada'];
+        
+      allow delete: if isAuthenticated() && resource.data.ownerId == request.auth.uid;
+    }
+
+    // =========================================================================
+    // COLECCIÓN 4: parking_spaces/{spaceId}
+    // Espacios físicos del parqueadero (A-01 .. A-12, B-13 .. B-24):
+    // - Lectura: Cualquier usuario autenticado (para renderizar el mapa en vivo).
+    // - Creación: Permitida únicamente si el documento no existe (idempotencia en seed).
+    // - Actualización: Permitida solo sobre 'status', 'currentReservationId' y 'occupiedByPlate',
+    //   validando que status pertenezca a los 3 estados permitidos.
+    // - Eliminación: Denegada siempre (los espacios del campus son fijos).
+    // =========================================================================
+    match /parking_spaces/{spaceId} {
+      allow read: if true;
+      
+      allow create: if isAuthenticated() 
+        && !exists(/databases/$(database)/documents/parking_spaces/$(spaceId))
+        && isValidStatus(request.resource.data.status);
+        
+      allow update: if isAuthenticated()
+        && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['status', 'currentReservationId', 'occupiedByPlate'])
+        && isValidStatus(request.resource.data.status);
+        
+      allow delete: if false;
+    }
+  }
+}

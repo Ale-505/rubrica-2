@@ -1,6 +1,7 @@
+import 'package:cloud_firestore/cloud_firestore.dart';
 import 'space_status.dart';
 
-/// Modelo que representa un espacio físico de parqueadero.
+/// Modelo que representa un espacio físico de parqueadero (/parking_spaces/{spaceId}).
 class ParkingSpace {
   final String id; // Ejemplo: 'A-01' o 'B-13'
   final String number; // Ejemplo: '01' o '13'
@@ -21,7 +22,50 @@ class ParkingSpace {
   /// Indica si el espacio está disponible para reservar.
   bool get isAvailable => status == SpaceStatus.disponible;
 
-  /// Retorna una copia con campos modificados si es necesario.
+  Map<String, dynamic> toMap() {
+    return {
+      'number': number,
+      'zone': zone,
+      'status': status.name,
+      'currentReservationId': currentReservationId,
+      'occupiedByPlate': occupiedByPlate,
+    };
+  }
+
+  factory ParkingSpace.fromMap(Map<String, dynamic> map, String id) {
+    final statusStr = (map['status'] as String?)?.toLowerCase() ?? 'disponible';
+    SpaceStatus st;
+    switch (statusStr) {
+      case 'ocupado':
+        st = SpaceStatus.ocupado;
+        break;
+      case 'reservado':
+        st = SpaceStatus.reservado;
+        break;
+      case 'disponible':
+      default:
+        st = SpaceStatus.disponible;
+        break;
+    }
+
+    final fallbackNumber = id.contains('-') ? id.split('-').last : id;
+    final fallbackZone = id.startsWith('A') ? 'Zona A' : 'Zona B';
+
+    return ParkingSpace(
+      id: id,
+      number: (map['number'] as String?) ?? fallbackNumber,
+      zone: (map['zone'] as String?) ?? fallbackZone,
+      status: st,
+      currentReservationId: map['currentReservationId'] as String?,
+      occupiedByPlate: map['occupiedByPlate'] as String?,
+    );
+  }
+
+  factory ParkingSpace.fromDoc(DocumentSnapshot doc) {
+    final data = doc.data() as Map<String, dynamic>? ?? {};
+    return ParkingSpace.fromMap(data, doc.id);
+  }
+
   ParkingSpace copyWith({
     String? id,
     String? number,

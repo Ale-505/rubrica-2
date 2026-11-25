@@ -1,0 +1,29 @@
+{
+  "project_info": {
+    "project_number": "52671288736",
+    "project_id": "rubrica-5b3b6",
+    "storage_bucket": "rubrica-5b3b6.firebasestorage.app"
+  },
+  "client": [
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:52671288736:android:60ba0e107daab47b7d00c5",
+        "android_client_info": {
+          "package_name": "com.universidad.parkinguni.parking_uni"
+        }
+      },
+      "oauth_client": [],
+      "api_key": [
+        {
+          "current_key": "AIzaSyAJzA8y-ZeL2r1McKjuMUZmZvFiGFy2RFY"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": []
+        }
+      }
+    }
+  ],
+  "configuration_version": "1"
+}

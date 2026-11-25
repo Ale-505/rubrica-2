@@ -1,7 +1,7 @@
 import 'package:flutter/material.dart';
 import '../models/vehicle_type.dart';
 
-/// Funciones utilitarias para la validación de campos del formulario de reserva.
+/// Funciones utilitarias para la validación de campos de formularios en ParkingUni.
 class Validators {
   Validators._();
 
@@ -32,6 +32,28 @@ class Validators {
     }
     if (!email.endsWith(institutionalDomain.toLowerCase())) {
       return 'El correo debe terminar en $institutionalDomain';
+    }
+    return null;
+  }
+
+  /// Valida la contraseña (mínimo 6 caracteres según estándar Firebase).
+  static String? validatePassword(String? value) {
+    if (value == null || value.isEmpty) {
+      return 'Por favor ingresa una contraseña';
+    }
+    if (value.length < 6) {
+      return 'La contraseña debe tener al menos 6 caracteres';
+    }
+    return null;
+  }
+
+  /// Valida la confirmación de contraseña.
+  static String? validatePasswordConfirm(String? value, String originalPassword) {
+    if (value == null || value.isEmpty) {
+      return 'Por favor confirma tu contraseña';
+    }
+    if (value != originalPassword) {
+      return 'Las contraseñas no coinciden';
     }
     return null;
   }
@@ -84,6 +106,21 @@ class Validators {
 
     if (endMinutes <= startMinutes) {
       return 'La hora de fin debe ser posterior a la hora de inicio';
+    }
+    return null;
+  }
+
+  /// Valida que si la fecha es hoy, la hora de inicio no sea anterior a la hora actual.
+  static String? validateStartTimeNotPast(DateTime? date, TimeOfDay? start) {
+    if (date == null || start == null) return null;
+    final now = DateTime.now();
+    final isToday = date.year == now.year && date.month == now.month && date.day == now.day;
+    if (isToday) {
+      final currentMinutes = now.hour * 60 + now.minute;
+      final startMinutes = start.hour * 60 + start.minute;
+      if (startMinutes < currentMinutes) {
+        return 'La hora de inicio no puede ser anterior a la hora actual';
+      }
     }
     return null;
   }

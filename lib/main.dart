@@ -1,16 +1,25 @@
+import 'package:firebase_core/firebase_core.dart';
 import 'package:flutter/material.dart';
-import 'screens/home_screen.dart';
+import 'firebase_options.dart';
+import 'screens/auth_gate.dart';
+import 'screens/login_screen.dart';
 import 'screens/main_navigation_screen.dart';
-import 'screens/map_results_screen.dart';
-import 'screens/reservation_form_screen.dart';
+import 'screens/register_screen.dart';
+import 'screens/vehicles_screen.dart';
 import 'theme/app_theme.dart';
 
-void main() {
+Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
+
+  // Inicialización oficial de Firebase (Plan Spark gratuito)
+  await Firebase.initializeApp(
+    options: DefaultFirebaseOptions.currentPlatform,
+  );
+
   runApp(const ParkingUniApp());
 }
 
-/// Aplicación principal ParkingUni para la gestión de parqueadero universitario.
+/// Aplicación principal ParkingUni con autenticación, persistencia remota y tiempo real.
 class ParkingUniApp extends StatelessWidget {
   const ParkingUniApp({super.key});
 
@@ -20,13 +29,15 @@ class ParkingUniApp extends StatelessWidget {
       title: 'ParkingUni',
       debugShowCheckedModeBanner: false,
       theme: AppTheme.lightTheme,
-      // Rutas nombradas del proyecto
-      initialRoute: '/',
+      home: const AuthGate(),
       routes: {
-        '/': (context) => const MainNavigationScreen(),
-        '/home': (context) => const HomeScreen(),
-        '/reservar': (context) => const ReservationFormScreen(),
-        '/mapa': (context) => const MapResultsScreen(),
+        '/login': (context) => const LoginScreen(),
+        '/register': (context) => const RegisterScreen(),
+        '/home': (context) => const MainNavigationScreen(initialIndex: 0),
+        '/reservar': (context) => const MainNavigationScreen(initialIndex: 1),
+        '/mis-reservas': (context) => const MainNavigationScreen(initialIndex: 2),
+        '/mapa': (context) => const MainNavigationScreen(initialIndex: 3),
+        '/vehiculos': (context) => const VehiclesScreen(),
       },
     );
   }

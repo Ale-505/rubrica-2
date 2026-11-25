@@ -1,8 +1,12 @@
+import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
-import 'package:parking_uni/data/parking_repository.dart';
+import 'package:parking_uni/models/app_user.dart';
+import 'package:parking_uni/models/parking_space.dart';
+import 'package:parking_uni/models/reservation.dart';
 import 'package:parking_uni/models/space_status.dart';
 import 'package:parking_uni/models/user_type.dart';
+import 'package:parking_uni/models/vehicle.dart';
 import 'package:parking_uni/models/vehicle_type.dart';
 import 'package:parking_uni/utils/validators.dart';
 
@@ -15,7 +19,7 @@ void main() {
       expect(Validators.validateFullName('Alejandro Escorcia'), isNull);
     });
 
-    test('Validador de correo institucional', () {
+    test('Validador de correo institucional con dominio configurable', () {
       expect(Validators.validateEmail(null), isNotNull);
       expect(Validators.validateEmail('usuario@gmail.com'), isNotNull);
       expect(Validators.validateEmail('invalido-email'), isNotNull);
@@ -23,6 +27,15 @@ void main() {
         Validators.validateEmail('a.escorcia@universidad.edu'),
         isNull,
       );
+    });
+
+    test('Validador de contraseñas de Firebase Auth', () {
+      expect(Validators.validatePassword(null), isNotNull);
+      expect(Validators.validatePassword('12345'), isNotNull);
+      expect(Validators.validatePassword('123456'), isNull);
+
+      expect(Validators.validatePasswordConfirm('123456', '123456'), isNull);
+      expect(Validators.validatePasswordConfirm('123456', '654321'), isNotNull);
     });
 
     test('Validador de placa para automóvil y motocicleta colombiana', () {
@@ -57,124 +70,131 @@ void main() {
       expect(Validators.validateDate(tomorrow), isNull);
       expect(Validators.validateDate(yesterday), isNotNull);
     });
+
+    test('Validador de hora no anterior si la fecha es hoy', () {
+      final today = DateTime.now();
+      final futureTime = TimeOfDay(
+        hour: (today.hour + 2) % 24,
+        minute: today.minute,
+      );
+
+      // Si aún hay horas en el día, probar hora futura y pasada
+      if (today.hour < 22) {
+        expect(Validators.validateStartTimeNotPast(today, futureTime), isNull);
+      }
+      if (today.hour > 1) {
+        final pastTime = TimeOfDay(hour: today.hour - 1, minute: today.minute);
+        expect(Validators.validateStartTimeNotPast(today, pastTime), isNotNull);
+      }
+    });
+
+    test('Validador de términos y condiciones', () {
+      expect(Validators.validateTerms(false), isNotNull);
+      expect(Validators.validateTerms(null), isNotNull);
+      expect(Validators.validateTerms(true), isNull);
+    });
   });
 
-  group('ParkingRepository Business Rules Test Suite', () {
-    late ParkingRepository repository;
-
-    setUp(() {
-      repository = ParkingRepository();
-      repository.resetData();
-    });
-
-    test('Inicializa 24 espacios divididos equitativamente en 2 zonas', () {
-      expect(repository.totalSpaces, 24);
-      final spacesA = repository.getSpacesByZone('Zona A');
-      final spacesB = repository.getSpacesByZone('Zona B');
-      expect(spacesA.length, 12);
-      expect(spacesB.length, 12);
-      expect(repository.availableCount + repository.occupiedCount + repository.reservedCount, 24);
-    });
-
-    test('Creación de reserva exitosa y cambio de estado a reservado', () {
-      final initialAvailable = repository.availableCount;
-      final initialReserved = repository.reservedCount;
-
-      // Buscar primer espacio disponible en Zona A
-      final availableSpace = repository.getAvailableSpaces('Zona A').first;
-
-      final result = repository.createReservation(
-        fullName: 'Estudiante Prueba',
-        email: 'prueba@universidad.edu',
-        userType: UserType.estudiante,
-        vehicleType: VehicleType.automovil,
-        plate: 'ZZZ999',
-        zone: 'Zona A',
-        spaceNumber: availableSpace.number,
-        date: DateTime.now(),
-        startTime: const TimeOfDay(hour: 14, minute: 0),
-        endTime: const TimeOfDay(hour: 16, minute: 0),
-        wantsReminder: true,
-      );
-
-      expect(result.success, isTrue);
-      expect(result.reservation, isNotNull);
-
-      // El espacio ahora debe estar reservado
-      final space = repository.getSpaceById(availableSpace.id);
-      expect(space?.status, SpaceStatus.reservado);
-      expect(repository.availableCount, initialAvailable - 1);
-      expect(repository.reservedCount, initialReserved + 1);
-    });
-
-    test('Evita doble reserva de la misma placa en horarios solapados', () {
-      final availableSpaces = repository.getAvailableSpaces('Zona A');
-      final space1 = availableSpaces[0];
-      final space2 = availableSpaces[1];
-
-      // Primera reserva exitosa
-      final res1 = repository.createReservation(
-        fullName: 'Alejandro Escorcia',
+  group('Firestore Models Serialization Suite (fromMap / toMap)', () {
+    test('AppUser toMap y fromMap', () {
+      final now = DateTime.now();
+      final user = AppUser(
+        id: 'uid123',
+        name: 'Alejandro Escorcia',
         email: 'a.escorcia@universidad.edu',
-        userType: UserType.estudiante,
-        vehicleType: VehicleType.automovil,
-        plate: 'ABC999',
-        zone: 'Zona A',
-        spaceNumber: space1.number,
-        date: DateTime.now(),
-        startTime: const TimeOfDay(hour: 10, minute: 0),
-        endTime: const TimeOfDay(hour: 12, minute: 0),
-        wantsReminder: true,
-      );
-      expect(res1.success, isTrue);
-
-      // Intento de segunda reserva en horario que se cruza (11:00 a 13:00) con la misma placa
-      final resConflict = repository.createReservation(
-        fullName: 'Alejandro Escorcia',
-        email: 'a.escorcia@universidad.edu',
-        userType: UserType.estudiante,
-        vehicleType: VehicleType.automovil,
-        plate: 'ABC999',
-        zone: 'Zona A',
-        spaceNumber: space2.number,
-        date: DateTime.now(),
-        startTime: const TimeOfDay(hour: 11, minute: 0),
-        endTime: const TimeOfDay(hour: 13, minute: 0),
-        wantsReminder: true,
+        createdAt: now,
       );
 
-      expect(resConflict.success, isFalse);
-      expect(resConflict.message, contains('ya cuenta con una reserva activa'));
+      final map = user.toMap();
+      expect(map['name'], 'Alejandro Escorcia');
+      expect(map['email'], 'a.escorcia@universidad.edu');
+      expect(map['createdAt'], isA<Timestamp>());
+
+      final fromMapUser = AppUser.fromMap(map, 'uid123');
+      expect(fromMapUser.id, 'uid123');
+      expect(fromMapUser.name, 'Alejandro Escorcia');
+      expect(fromMapUser.email, 'a.escorcia@universidad.edu');
     });
 
-    test('Cancelación de reserva libera el espacio de inmediato', () {
-      final availableSpace = repository.getAvailableSpaces('Zona B').first;
-
-      final res = repository.createReservation(
-        fullName: 'Docente Prueba',
-        email: 'docente@universidad.edu',
-        userType: UserType.docente,
+    test('Vehicle toMap y fromMap', () {
+      final now = DateTime.now();
+      final vehicle = Vehicle(
+        id: 'veh001',
+        ownerId: 'uid123',
+        plate: 'ABC123',
         vehicleType: VehicleType.automovil,
-        plate: 'DOC123',
-        zone: 'Zona B',
-        spaceNumber: availableSpace.number,
-        date: DateTime.now(),
-        startTime: const TimeOfDay(hour: 15, minute: 0),
-        endTime: const TimeOfDay(hour: 17, minute: 0),
-        wantsReminder: false,
+        brand: 'Mazda 3',
+        color: 'Rojo',
+        createdAt: now,
       );
 
-      final resId = res.reservation!.id;
-      final spaceBefore = repository.getSpaceById(availableSpace.id);
-      expect(spaceBefore?.status, SpaceStatus.reservado);
+      final map = vehicle.toMap();
+      expect(map['plate'], 'ABC123');
+      expect(map['vehicleType'], 'automovil');
+      expect(map['brand'], 'Mazda 3');
 
-      // Cancelar reserva
-      final cancelSuccess = repository.cancelReservation(resId);
-      expect(cancelSuccess, isTrue);
+      final fromMapVehicle = Vehicle.fromMap(map, 'veh001');
+      expect(fromMapVehicle.id, 'veh001');
+      expect(fromMapVehicle.plate, 'ABC123');
+      expect(fromMapVehicle.vehicleType, VehicleType.automovil);
+    });
 
-      // Espacio liberado vuelve a disponible
-      final spaceAfter = repository.getSpaceById(availableSpace.id);
-      expect(spaceAfter?.status, SpaceStatus.disponible);
+    test('ParkingSpace toMap y fromMap', () {
+      final space = ParkingSpace(
+        id: 'A-01',
+        number: '01',
+        zone: 'Zona A',
+        status: SpaceStatus.disponible,
+      );
+
+      final map = space.toMap();
+      expect(map['number'], '01');
+      expect(map['zone'], 'Zona A');
+      expect(map['status'], 'disponible');
+
+      final fromMapSpace = ParkingSpace.fromMap(map, 'A-01');
+      expect(fromMapSpace.id, 'A-01');
+      expect(fromMapSpace.status, SpaceStatus.disponible);
+      expect(fromMapSpace.isAvailable, isTrue);
+    });
+
+    test('Reservation toMap, fromMap y helpers', () {
+      final date = DateTime(2026, 11, 25);
+      final res = Reservation(
+        id: 'res999',
+        ownerId: 'uid123',
+        ownerName: 'Alejandro Escorcia',
+        ownerEmail: 'a.escorcia@universidad.edu',
+        userType: UserType.estudiante,
+        vehicleId: 'veh001',
+        plate: 'ABC123',
+        vehicleType: VehicleType.automovil,
+        zone: 'Zona A',
+        spaceId: 'A-01',
+        spaceNumber: '01',
+        date: date,
+        startMinutes: 480, // 08:00
+        endMinutes: 600,   // 10:00
+        wantsReminder: true,
+        status: ReservationStatus.activa,
+      );
+
+      expect(res.formattedDate, '25/11/2026');
+      expect(res.formattedSchedule, '08:00 - 10:00');
+      expect(res.isActive, isTrue);
+
+      final map = res.toMap();
+      expect(map['plate'], 'ABC123');
+      expect(map['startMinutes'], 480);
+      expect(map['endMinutes'], 600);
+      expect(map['status'], 'activa');
+
+      final fromMapRes = Reservation.fromMap(map, 'res999');
+      expect(fromMapRes.id, 'res999');
+      expect(fromMapRes.plate, 'ABC123');
+      expect(fromMapRes.startTime.hour, 8);
+      expect(fromMapRes.endTime.hour, 10);
+      expect(fromMapRes.status, ReservationStatus.activa);
     });
   });
 }

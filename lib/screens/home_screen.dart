@@ -1,47 +1,252 @@
+import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:flutter/material.dart';
-import '../data/parking_repository.dart';
+import '../models/parking_space.dart';
+import '../models/space_status.dart';
+import '../services/auth_service.dart';
+import '../services/error_messages.dart';
+import '../services/spaces_repository.dart';
 import '../theme/app_theme.dart';
 import '../widgets/stat_card.dart';
+import '../widgets/sync_status_badge.dart';
 
-/// Pantalla Principal (Inicio) de ParkingUni.
-/// Presenta el encabezado institucional, los contadores de disponibilidad en tiempo real,
-/// la justificación del problema universitario que resuelve, y accesos directos rápidos.
-class HomeScreen extends StatelessWidget {
-  final Function(int targetTab, {String? preselectedZone, String? preselectedSpaceNumber})? onNavigateTab;
+/// Pantalla 1 (Obligatoria): Pantalla Principal / Inicio conectada a Cloud Firestore.
+class HomeScreen extends StatefulWidget {
+  final Function(int targetTab)? onNavigateTab;
+  final VoidCallback? onOpenVehicles;
 
   const HomeScreen({
     super.key,
     this.onNavigateTab,
+    this.onOpenVehicles,
   });
 
   @override
+  State<HomeScreen> createState() => _HomeScreenState();
+}
+
+class _HomeScreenState extends State<HomeScreen> {
+  final _spacesRepo = SpacesRepository();
+  bool _isInitializing = false;
+
+  void _confirmSignOut() {
+    showDialog(
+      context: context,
+      builder: (ctx) {
+        return AlertDialog(
+          title: const Row(
+            children: [
+              Icon(Icons.logout_rounded, color: AppTheme.darkHeader),
+              SizedBox(width: 8),
+              Text('Cerrar sesión'),
+            ],
+          ),
+          content: const Text(
+            '¿Estás seguro de que deseas cerrar tu sesión en ParkingUni?',
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.pop(ctx),
+              child: const Text('Cancelar'),
+            ),
+            ElevatedButton(
+              onPressed: () async {
+                Navigator.pop(ctx);
+                await AuthService().signOut();
+              },
+              child: const Text('Cerrar sesión'),
+            ),
+          ],
+        );
+      },
+    );
+  }
+
+  void _confirmResetSpaces() {
+    showDialog(
+      context: context,
+      builder: (ctx) {
+        return AlertDialog(
+          title: const Row(
+            children: [
+              Icon(Icons.cleaning_services_rounded, color: AppTheme.availableGreen),
+              SizedBox(width: 8),
+              Text('Liberar espacios'),
+            ],
+          ),
+          content: const Text(
+            '¿Deseas restablecer todos los 24 espacios de parqueadero a estado DISPONIBLE (100% libres)?\n\nEsto dejará Ocupados en 0 para que puedas probar reservas limpias.',
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.pop(ctx),
+              child: const Text('Cancelar'),
+            ),
+            ElevatedButton(
+              onPressed: () {
+                Navigator.pop(ctx);
+                _resetAllSpaces();
+              },
+              child: const Text('Liberar todos'),
+            ),
+          ],
+        );
+      },
+    );
+  }
+
+  Future<void> _resetAllSpaces() async {
+    setState(() => _isInitializing = true);
+    final messenger = ScaffoldMessenger.of(context);
+    try {
+      await _spacesRepo.resetAllSpacesToAvailable();
+      if (!mounted) return;
+      messenger.showSnackBar(
+        const SnackBar(
+          content: Text('¡Todos los 24 espacios han sido liberados (100% disponibles, 0 ocupados)!'),
+          backgroundColor: AppTheme.availableGreen,
+        ),
+      );
+    } catch (e) {
+      if (!mounted) return;
+      messenger.showSnackBar(
+        SnackBar(content: Text('Error al liberar espacios: $e'), backgroundColor: AppTheme.occupiedRed),
+      );
+    } finally {
+      if (mounted) setState(() => _isInitializing = false);
+    }
+  }
+
+  Future<void> _initializeParkingSpaces({bool withMockOccupied = false}) async {
+    setState(() => _isInitializing = true);
+    final messenger = ScaffoldMessenger.of(context);
+    try {
+      final created = await _spacesRepo.initializeSpacesIfEmpty(withMockOccupied: withMockOccupied);
+      if (!mounted) return;
+      if (created) {
+        messenger.showSnackBar(
+          const SnackBar(
+            content: Text('¡Parqueadero inicializado con éxito en Firestore (24 espacios 100% disponibles)!'),
+            backgroundColor: AppTheme.availableGreen,
+          ),
+        );
+      } else {
+        messenger.showSnackBar(
+          const SnackBar(
+            content: Text('Los espacios ya existen en Firestore. Puedes usar el botón de escoba para liberarlos a 100% disponibles.'),
+            backgroundColor: AppTheme.reservedAmber,
+          ),
+        );
+      }
+    } on FirebaseException catch (e) {
+      if (!mounted) return;
+      messenger.showSnackBar(
+        SnackBar(
+          content: Text(FirebaseErrorMessages.getFirestoreErrorMessage(e)),
+          backgroundColor: AppTheme.occupiedRed,
+        ),
+      );
+    } catch (e) {
+      if (!mounted) return;
+      messenger.showSnackBar(
+        SnackBar(content: Text('Error: $e'), backgroundColor: AppTheme.occupiedRed),
+      );
+    } finally {
+      if (mounted) setState(() => _isInitializing = false);
+    }
+  }
+
+  @override
   Widget build(BuildContext context) {
-    final repository = ParkingRepository();
+    final user = AuthService().currentUser;
+    final userName = user?.displayName ?? 'Comunidad Universitaria';
+    final userEmail = user?.email ?? '';
 
     return Scaffold(
       body: SafeArea(
-        child: ListenableBuilder(
-          listenable: repository,
-          builder: (context, _) {
+        child: StreamBuilder<QuerySnapshot<Map<String, dynamic>>>(
+          stream: FirebaseFirestore.instance.collection('parking_spaces').snapshots(),
+          builder: (context, snapshot) {
+            final querySnapshot = snapshot.data;
+            final spaces = querySnapshot != null
+                ? querySnapshot.docs.map((d) => ParkingSpace.fromDoc(d)).toList()
+                : <ParkingSpace>[];
+
+            final total = spaces.length;
+            final available = spaces.where((s) => s.status == SpaceStatus.disponible).length;
+            final occupied = spaces.where((s) => s.status == SpaceStatus.ocupado).length;
+            final reserved = spaces.where((s) => s.status == SpaceStatus.reservado).length;
+
             return SingleChildScrollView(
               physics: const BouncingScrollPhysics(),
               padding: const EdgeInsets.only(bottom: 24),
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.stretch,
                 children: [
-                  // 1. Encabezado principal oscuro con identidad visual
-                  _buildHeader(context),
+                  // 1. Encabezado principal oscuro con identidad institucional y usuario
+                  _buildHeader(userName, userEmail),
 
                   Padding(
                     padding: const EdgeInsets.symmetric(horizontal: 16),
                     child: Column(
                       crossAxisAlignment: CrossAxisAlignment.start,
                       children: [
-                        const SizedBox(height: 16),
+                        const SizedBox(height: 12),
 
-                        // 2. Título de sección de estadísticas
+                        // Indicador de sincronización en tiempo real
+                        if (querySnapshot != null)
+                          SyncStatusBadge(
+                            hasPendingWrites: querySnapshot.metadata.hasPendingWrites,
+                            isFromCache: querySnapshot.metadata.isFromCache,
+                          ),
+
+                        // Botón de Inicialización si Firestore está vacío
+                        if (total == 0) ...[
+                          Container(
+                            padding: const EdgeInsets.all(16),
+                            margin: const EdgeInsets.only(bottom: 16),
+                            decoration: BoxDecoration(
+                              color: AppTheme.reservedAmberLight.withValues(alpha: 0.5),
+                              borderRadius: BorderRadius.circular(16),
+                              border: Border.all(color: AppTheme.reservedAmber.withValues(alpha: 0.4)),
+                            ),
+                            child: Column(
+                              crossAxisAlignment: CrossAxisAlignment.start,
+                              children: [
+                                const Row(
+                                  children: [
+                                    Icon(Icons.warning_amber_rounded, color: AppTheme.reservedAmber),
+                                    SizedBox(width: 8),
+                                    Text(
+                                      'Parqueadero sin inicializar',
+                                      style: TextStyle(fontWeight: FontWeight.w700, fontSize: 14),
+                                    ),
+                                  ],
+                                ),
+                                const SizedBox(height: 6),
+                                const Text(
+                                  'Crea los 24 espacios iniciales (Zona A y B) en Cloud Firestore con un solo clic.',
+                                  style: TextStyle(fontSize: 12, color: AppTheme.textSecondary),
+                                ),
+                                const SizedBox(height: 12),
+                                ElevatedButton.icon(
+                                  onPressed: _isInitializing ? null : _initializeParkingSpaces,
+                                  icon: _isInitializing
+                                      ? const SizedBox(
+                                          width: 16,
+                                          height: 16,
+                                          child: CircularProgressIndicator(strokeWidth: 2, color: Colors.white),
+                                        )
+                                      : const Icon(Icons.add_task_rounded, size: 18),
+                                  label: Text(_isInitializing ? 'Inicializando...' : 'Inicializar parqueadero'),
+                                ),
+                              ],
+                            ),
+                          ),
+                        ],
+
+                        // 2. Contadores en tiempo real desde Firestore
                         const Text(
-                          'Disponibilidad actual',
+                          'Disponibilidad en vivo (Firestore)',
                           style: TextStyle(
                             fontSize: 16,
                             fontWeight: FontWeight.w700,
@@ -50,7 +255,6 @@ class HomeScreen extends StatelessWidget {
                         ),
                         const SizedBox(height: 10),
 
-                        // Resumen en tarjetas (4 contadores en vivo)
                         LayoutBuilder(
                           builder: (context, constraints) {
                             final cardWidth = (constraints.maxWidth - 12) / 2;
@@ -62,29 +266,27 @@ class HomeScreen extends StatelessWidget {
                                   width: cardWidth,
                                   child: StatCard(
                                     title: 'Total espacios',
-                                    count: repository.totalSpaces,
+                                    count: total,
                                     icon: Icons.local_parking_rounded,
                                     color: AppTheme.darkHeader,
-                                    backgroundColor:
-                                        AppTheme.borderLight.withValues(alpha: 0.5),
+                                    backgroundColor: AppTheme.borderLight.withValues(alpha: 0.5),
                                   ),
                                 ),
                                 SizedBox(
                                   width: cardWidth,
                                   child: StatCard(
                                     title: 'Disponibles',
-                                    count: repository.availableCount,
+                                    count: available,
                                     icon: Icons.check_circle_rounded,
                                     color: AppTheme.availableGreen,
-                                    backgroundColor:
-                                        AppTheme.availableGreenLight,
+                                    backgroundColor: AppTheme.availableGreenLight,
                                   ),
                                 ),
                                 SizedBox(
                                   width: cardWidth,
                                   child: StatCard(
                                     title: 'Ocupados',
-                                    count: repository.occupiedCount,
+                                    count: occupied,
                                     icon: Icons.directions_car_rounded,
                                     color: AppTheme.occupiedRed,
                                     backgroundColor: AppTheme.occupiedRedLight,
@@ -94,28 +296,25 @@ class HomeScreen extends StatelessWidget {
                                   width: cardWidth,
                                   child: StatCard(
                                     title: 'Reservados',
-                                    count: repository.reservedCount,
+                                    count: reserved,
                                     icon: Icons.access_time_filled_rounded,
                                     color: AppTheme.reservedAmber,
-                                    backgroundColor:
-                                        AppTheme.reservedAmberLight,
+                                    backgroundColor: AppTheme.reservedAmberLight,
                                   ),
                                 ),
                               ],
                             );
                           },
                         ),
-
                         const SizedBox(height: 20),
 
-                        // 3. Mini descripción del problema resuelto
+                        // 3. Problemática y propósito
                         _buildProblemDescriptionCard(),
-
                         const SizedBox(height: 20),
 
-                        // 4. Accesos directos y botones de navegación
+                        // 4. Accesos directos y navegación
                         const Text(
-                          'Acciones rápidas',
+                          'Gestión y Servicios',
                           style: TextStyle(
                             fontSize: 16,
                             fontWeight: FontWeight.w700,
@@ -124,40 +323,53 @@ class HomeScreen extends StatelessWidget {
                         ),
                         const SizedBox(height: 12),
 
-                        // Botón/Tarjeta: Reservar un espacio
+                        // Tarjeta: Reservar un espacio
                         _buildActionCard(
-                          context: context,
                           title: 'Reservar un espacio',
-                          subtitle:
-                              'Registra tu vehículo y asegura tu lugar antes de llegar',
+                          subtitle: 'Asegura tu lugar con transacción atómica en Firestore',
                           icon: Icons.bookmark_add_rounded,
-                          accentColor: AppTheme.darkHeader,
-                          buttonLabel: 'Ir al formulario',
                           onTap: () {
-                            if (onNavigateTab != null) {
-                              onNavigateTab!(1);
-                            } else {
-                              Navigator.pushNamed(context, '/reservar');
+                            if (widget.onNavigateTab != null) {
+                              widget.onNavigateTab!(1);
                             }
                           },
                         ),
+                        const SizedBox(height: 10),
 
-                        const SizedBox(height: 12),
-
-                        // Botón/Tarjeta: Ver mapa y mis reservas
+                        // Tarjeta: Ver mapa en vivo
                         _buildActionCard(
-                          context: context,
-                          title: 'Ver mapa y mis reservas',
-                          subtitle:
-                              'Consulta el diagrama esquemático de zonas A y B',
+                          title: 'Mapa en vivo del parqueadero',
+                          subtitle: 'Diagrama esquemático sincronizado en tiempo real',
                           icon: Icons.map_rounded,
-                          accentColor: AppTheme.darkHeader,
-                          buttonLabel: 'Ver mapa interactivo',
                           onTap: () {
-                            if (onNavigateTab != null) {
-                              onNavigateTab!(2);
-                            } else {
-                              Navigator.pushNamed(context, '/mapa');
+                            if (widget.onNavigateTab != null) {
+                              widget.onNavigateTab!(3);
+                            }
+                          },
+                        ),
+                        const SizedBox(height: 10),
+
+                        // Tarjeta: Mis reservas
+                        _buildActionCard(
+                          title: 'Mis reservas',
+                          subtitle: 'Historial, detalles, edición y cancelación de reservas',
+                          icon: Icons.history_rounded,
+                          onTap: () {
+                            if (widget.onNavigateTab != null) {
+                              widget.onNavigateTab!(2);
+                            }
+                          },
+                        ),
+                        const SizedBox(height: 10),
+
+                        // Tarjeta: Mis vehículos
+                        _buildActionCard(
+                          title: 'Mis vehículos',
+                          subtitle: 'Registra tus automóviles y motocicletas',
+                          icon: Icons.directions_car_filled_rounded,
+                          onTap: () {
+                            if (widget.onOpenVehicles != null) {
+                              widget.onOpenVehicles!();
                             }
                           },
                         ),
@@ -173,15 +385,12 @@ class HomeScreen extends StatelessWidget {
     );
   }
 
-  /// Encabezado oscuro con logotipo, título y subtítulo institucional
-  Widget _buildHeader(BuildContext context) {
+  Widget _buildHeader(String userName, String userEmail) {
     return Container(
       padding: const EdgeInsets.fromLTRB(20, 20, 20, 24),
       decoration: const BoxDecoration(
         color: AppTheme.darkHeader,
-        borderRadius: BorderRadius.vertical(
-          bottom: Radius.circular(24),
-        ),
+        borderRadius: BorderRadius.vertical(bottom: Radius.circular(24)),
       ),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
@@ -210,9 +419,9 @@ class HomeScreen extends StatelessWidget {
                     ),
                   ),
                   const SizedBox(width: 12),
-                  Column(
+                  const Column(
                     crossAxisAlignment: CrossAxisAlignment.start,
-                    children: const [
+                    children: [
                       Text(
                         'ParkingUni',
                         style: TextStyle(
@@ -234,43 +443,36 @@ class HomeScreen extends StatelessWidget {
                   ),
                 ],
               ),
-              Container(
-                padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
-                decoration: BoxDecoration(
-                  color: Colors.white.withValues(alpha: 0.12),
-                  borderRadius: BorderRadius.circular(20),
-                ),
-                child: const Row(
-                  mainAxisSize: MainAxisSize.min,
-                  children: [
-                    Icon(Icons.school_rounded, color: Colors.white, size: 14),
-                    SizedBox(width: 4),
-                    Text(
-                      'Campus',
-                      style: TextStyle(
-                        color: Colors.white,
-                        fontSize: 11,
-                        fontWeight: FontWeight.w600,
-                      ),
-                    ),
-                  ],
-                ),
+              Row(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  IconButton(
+                    tooltip: 'Liberar todos los espacios (0 ocupados)',
+                    icon: const Icon(Icons.cleaning_services_rounded, color: Colors.white),
+                    onPressed: _isInitializing ? null : _confirmResetSpaces,
+                  ),
+                  IconButton(
+                    tooltip: 'Cerrar sesión',
+                    icon: const Icon(Icons.logout_rounded, color: Colors.white),
+                    onPressed: _confirmSignOut,
+                  ),
+                ],
               ),
             ],
           ),
           const SizedBox(height: 16),
-          const Text(
-            '¡Bienvenido al sistema de parqueadero!',
-            style: TextStyle(
+          Text(
+            '¡Hola, $userName!',
+            style: const TextStyle(
               color: Colors.white,
-              fontSize: 15,
-              fontWeight: FontWeight.w600,
+              fontSize: 16,
+              fontWeight: FontWeight.w700,
             ),
           ),
-          const SizedBox(height: 4),
-          const Text(
-            'Consulta el estado de las zonas y reserva tu puesto sin filas.',
-            style: TextStyle(
+          const SizedBox(height: 2),
+          Text(
+            userEmail,
+            style: const TextStyle(
               color: Color(0xFFCBD5E1),
               fontSize: 12,
             ),
@@ -280,7 +482,6 @@ class HomeScreen extends StatelessWidget {
     );
   }
 
-  /// Tarjeta explicativa de la problemática resuelta
   Widget _buildProblemDescriptionCard() {
     return Container(
       padding: const EdgeInsets.all(16),
@@ -289,28 +490,17 @@ class HomeScreen extends StatelessWidget {
         borderRadius: BorderRadius.circular(16),
         border: Border.all(color: AppTheme.borderLight),
       ),
-      child: Row(
+      child: const Row(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          Container(
-            padding: const EdgeInsets.all(8),
-            decoration: BoxDecoration(
-              color: AppTheme.darkHeader.withValues(alpha: 0.06),
-              shape: BoxShape.circle,
-            ),
-            child: const Icon(
-              Icons.info_outline_rounded,
-              color: AppTheme.darkHeader,
-              size: 20,
-            ),
-          ),
-          const SizedBox(width: 12),
-          const Expanded(
+          Icon(Icons.info_outline_rounded, color: AppTheme.darkHeader, size: 22),
+          SizedBox(width: 12),
+          Expanded(
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
                 Text(
-                  'Optimiza tu tiempo en el campus',
+                  'Ahorra tiempo y evita congestiones',
                   style: TextStyle(
                     fontSize: 13,
                     fontWeight: FontWeight.w700,
@@ -319,12 +509,8 @@ class HomeScreen extends StatelessWidget {
                 ),
                 SizedBox(height: 4),
                 Text(
-                  'No pierdas tiempo buscando puesto manualmente. Consulta los espacios libres en el mapa esquemático y reserva con anticipación para evitar congestión vehicular.',
-                  style: TextStyle(
-                    fontSize: 12,
-                    color: AppTheme.textSecondary,
-                    height: 1.4,
-                  ),
+                  'Consulta la disponibilidad de espacios en tiempo real o reserva con anticipación antes de desplazarte al campus universitario.',
+                  style: TextStyle(fontSize: 12, color: AppTheme.textSecondary, height: 1.4),
                 ),
               ],
             ),
@@ -334,14 +520,10 @@ class HomeScreen extends StatelessWidget {
     );
   }
 
-  /// Tarjeta de acción personalizada para navegar a las pantallas 2 y 3
   Widget _buildActionCard({
-    required BuildContext context,
     required String title,
     required String subtitle,
     required IconData icon,
-    required Color accentColor,
-    required String buttonLabel,
     required VoidCallback onTap,
   }) {
     return Material(
@@ -366,13 +548,13 @@ class HomeScreen extends StatelessWidget {
           child: Row(
             children: [
               Container(
-                width: 48,
-                height: 48,
+                width: 44,
+                height: 44,
                 decoration: BoxDecoration(
                   color: AppTheme.darkHeader,
                   borderRadius: BorderRadius.circular(12),
                 ),
-                child: Icon(icon, color: Colors.white, size: 24),
+                child: Icon(icon, color: Colors.white, size: 22),
               ),
               const SizedBox(width: 14),
               Expanded(
@@ -382,7 +564,7 @@ class HomeScreen extends StatelessWidget {
                     Text(
                       title,
                       style: const TextStyle(
-                        fontSize: 15,
+                        fontSize: 14,
                         fontWeight: FontWeight.w700,
                         color: AppTheme.textPrimary,
                       ),
@@ -390,19 +572,12 @@ class HomeScreen extends StatelessWidget {
                     const SizedBox(height: 2),
                     Text(
                       subtitle,
-                      style: const TextStyle(
-                        fontSize: 12,
-                        color: AppTheme.textSecondary,
-                      ),
+                      style: const TextStyle(fontSize: 11, color: AppTheme.textSecondary),
                     ),
                   ],
                 ),
               ),
-              const Icon(
-                Icons.arrow_forward_ios_rounded,
-                size: 16,
-                color: AppTheme.textSecondary,
-              ),
+              const Icon(Icons.arrow_forward_ios_rounded, size: 14, color: AppTheme.textSecondary),
             ],
           ),
         ),
